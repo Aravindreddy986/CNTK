@@ -23,6 +23,7 @@ namespace Microsoft { namespace MSR { namespace CNTK {
 // The methods below determine evaluation order, which is tricky in presence of recurrent loops.
 // TODO: Can this be moved to a separate class?
 
+static int DetermineLoopDirection(const std::vector<ComputationNodeBasePtr>& nestedNodes);
 static int GetRecurrenceSteppingDirection(const ComputationNodeBasePtr&);
 
 // FormRecurrentLoops() -- MAIN ENTRY POINT for network recurrent-loop analysis. All other functions in this CPP are called only from this one.
@@ -34,13 +35,61 @@ static int GetRecurrenceSteppingDirection(const ComputationNodeBasePtr&);
 // Is often called before ValidateNetwork() on a root; will be called from inside ValidateNetwork() as well.
 // This function is called for multiple nodes, e.g. eval and training criterion. I.e. it must be able to add to a previous result. E.g. it does not clear the m_visited flags at start.
 // Note: This function is not lazy, i.e. not cached. BuildAndValidateSubNetwork() caches, but others don't.
-// TODO: In the future, this function will not take a rootNode parameter anymore.
-void ComputationNetwork::FormRecurrentLoops(const ComputationNodeBasePtr& rootNode /*or nullptr for all*/)
+void ComputationNetwork::FormRecurrentLoops()
+{
+    ExecutionGraph graph;
+
+    // Get strong components.
+    ::CNTK::StrongComponentDetector detector;
+    auto strongComponents = detector.StrongComponents<ComputationNodeBasePtr>(m_allRoots, graph);
+
+    std::function<bool(const ComputationNodeBasePtr&)> delay
+        = [this](const ComputationNodeBasePtr& n) { return true; };
+
+    // Sort nodes inside strong components in the evaluation order.
+    detector.EvaluationSort(strongComponents, graph, delay);
+
+    // Update m_allSEQNodes accordingly.
+    for (const auto c : strongComponents)
+    {
+        SEQTraversalFlowControlNode flowControlNode(c.m_loopId, c.m_root);
+        flowControlNode.m_nestedNodes = c.m_nestedNodes; // TODO: make these two part of the constructor
+        for (auto node : flowControlNode.m_nestedNodes)
+            node->m_isPartOfLoop = true; // this is the only flag in ComputationNode that escapes FormRecurrentLoops()!
+        flowControlNode.m_steppingDirection = DetermineLoopDirection(flowControlNode.m_nestedNodes);
+        m_allSEQNodes.push_back(make_shared<SEQTraversalFlowControlNode>(std::move(flowControlNode)));
+    }
+
+    // Peform global sort on all nodes honoring inner strong component sorting.
+    auto sortedNodes = detector.EvaluationSort(strongComponents, m_allRoots, graph);
+
+    // Update global eval order in m_evalOrder.
+    UpdateEvalOrder(nullptr, sortedNodes); // TODO: Get rid of this after-the-fact patch.
+
+    // log the loops
+    if (TraceLevel() > 0)
+    {
+        for (auto& iter : m_allSEQNodes)
+        {
+            fprintf(stderr, "\nLoop[%d] --> %ls -> %d nodes\n", (int)iter->m_loopId, iter->NodeName().c_str(), (int)iter->m_nestedNodes.size());
+            size_t n = 0;
+            for (auto itr = iter->m_nestedNodes.begin(); itr != iter->m_nestedNodes.end(); itr++)
+            {
+                if (n++ % 3 == 0)
+                    fprintf(stderr, "\n");
+                fprintf(stderr, "\t%ls", (*itr)->NodeName().c_str());
+            }
+            fprintf(stderr, "\n");
+        }
+    }
+}
+
+void ComputationNetwork::FormRecurrentLoopsOld()
 {
     //fprintf(stderr, "FormRecurrentLoops for node %ls", rootNode ? rootNode->NodeName().c_str() : L"NULL");
     // get the depth-first traversal order
     // Note: This is only used for resetting the state and resetting m_visitedOrder. I think we only need the set, not the order.
-    const list<ComputationNodeBasePtr>& nodes = GetEvalOrder(rootNode);
+    const list<ComputationNodeBasePtr>& nodes = GetEvalOrder(nullptr);
 
     // initialize the node state owned by us
     // TODO: Verify that the other call to this function is unnecessary, then inline this function here.
@@ -48,7 +97,7 @@ void ComputationNetwork::FormRecurrentLoops(const ComputationNodeBasePtr& rootNo
         node->PurgeStateForFormingRecurrentLoops();
 
     // determine the strongly connected cliques -> m_allSEQNodes[]
-    DetermineSCCs(rootNode);
+    DetermineSCCs(nullptr);
     // now we have formed all loops, with all nodes assigned to a loop or none
 
     // Two reorderings follow:
@@ -144,7 +193,7 @@ void ComputationNetwork::FormRecurrentLoops(const ComputationNodeBasePtr& rootNo
 
         ReorderLoops(reorderedNodes); // group nodes in loops together
 
-        UpdateEvalOrder(rootNode, reorderedNodes); // TODO: Get rid of this after-the-fact patch.
+        UpdateEvalOrder(nullptr, reorderedNodes); // TODO: Get rid of this after-the-fact patch.
     }
 
     // --- END reorder process   --TODO: eliminate this process

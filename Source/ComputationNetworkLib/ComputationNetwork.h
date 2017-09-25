@@ -30,6 +30,9 @@
 #include <unordered_map>
 #include <set>
 
+#include "GraphOperations.h"
+#include "StrongComponentDetector.h"
+
 namespace Microsoft { namespace MSR { namespace CNTK {
 
 // ===========================================================================
@@ -43,6 +46,15 @@ class ComputationNetwork :
 {
 public:
     typedef shared_ptr<ComputationNetwork> ComputationNetworkPtr;
+
+    class ExecutionGraph : public ::CNTK::DirectedGraph<ComputationNodeBasePtr>
+    {
+    public:
+        std::vector<ComputationNodeBasePtr> Predecessors(const ComputationNodeBasePtr& node) const override
+        {
+            return node->GetInputs();
+        }
+    };
 
     // -----------------------------------------------------------------------
     // construction
@@ -279,7 +291,8 @@ public:
     // TODO: Can this be moved to a separate class?
 private:
     // This is part of the FormRecurrentLoops() process, and only called from there.
-    void FormRecurrentLoops(const ComputationNodeBasePtr& rootNode);
+    void FormRecurrentLoops();
+    void FormRecurrentLoopsOld();
     void DetermineSCCs(const ComputationNodeBasePtr& rootNode);
     void DetermineSCCsR(ComputationNodeBasePtr cur, std::list<ComputationNodeBasePtr>& sccStack, size_t& index, size_t& loopId);
     void DetermineLoopForwardOrderR(std::unordered_set<ComputationNodeBasePtr>& visited, std::unordered_set<ComputationNodeBasePtr>& recStack, std::list<ComputationNodeBasePtr>& nodesStack, ComputationNodeBasePtr cur);
@@ -305,13 +318,14 @@ public:
         }
 
         std::list<ComputationNodeBasePtr> evalOrder;
+        ExecutionGraph graph;
         if (!rootNode) // this creates the global one
         {
-            evalOrder = ComputationNodeBase::EnumerateNodes(m_allRoots);
+            evalOrder = ::CNTK::PreOrderTraversal(m_allRoots, graph);
         }
         else // this creates a subset of the global eval order of all nodes that rootNode depends on
         {
-            auto rawTraversalForRoot = ComputationNodeBase::EnumerateNodes({ rootNode }); // traverse to find the set (we ignore the order)
+            auto rawTraversalForRoot = ::CNTK::PreOrderTraversal({ rootNode }, graph);// traverse to find the set (we ignore the order)
             set<ComputationNodeBasePtr> rawSet(rawTraversalForRoot.begin(), rawTraversalForRoot.end());
             for (const auto& node : GetEvalOrder(nullptr)) // iterate over global one and pull out everything that is included in the set for rootNode
             {

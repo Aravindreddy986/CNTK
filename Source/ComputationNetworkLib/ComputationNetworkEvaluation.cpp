@@ -479,13 +479,14 @@ void ComputationNetwork::VerifyIsCompiled(const char* where) const
 void ComputationNetwork::CompileNetwork()
 {
     if (TraceLevel() > 0)
-    fprintf(stderr, "\nPost-processing network...\n");
+        fprintf(stderr, "\nPost-processing network...\n");
 
     // We may only get here if not !IsCompiled(). We could now verify each member to be virgin.
     // Or just invalidate it again, which is easier and safer.
     InvalidateCompiledNetwork();
 
     // all steps below have to be repeated for all root nodes (=nodes without parents and PreComputeNodes)
+    // eldak -> not important for me, just discovers all root nodes, without parents.
     DetermineSetOfAllRoots();
 
     if (TraceLevel() > 0)
@@ -505,6 +506,7 @@ void ComputationNetwork::CompileNetwork()
     // STEP: Form the m_inputValues and m_learnableParameters sets for the entire network.
     // Needed for ResetMBLayouts() below.
     // TODO: Move this further down; or decide whether the 'nullptr' version is needed, other than ResetMBLayouts() which could use the global order and filter by itself.
+    // eldak -> not important for me, collects all input and learnable parameters.
     CollectInputAndLearnableParameters(nullptr);
 
     // STEP: Establish time-axis relationships.
@@ -513,7 +515,7 @@ void ComputationNetwork::CompileNetwork()
     ResetMBLayouts();
 
     // STEP: Discover nested loops.
-    FormRecurrentLoops(nullptr); // form the global one  --TODO: just use this; should be no need to do this for each root
+    FormRecurrentLoops(); // form the global one  --TODO: just use this; should be no need to do this for each root
     //for (auto& node : m_allRoots)
     //    FormRecurrentLoops(node); // BUGBUG: These calls are needed because they patch EvalOrders. Will be unnecessary once we move this out.
 
