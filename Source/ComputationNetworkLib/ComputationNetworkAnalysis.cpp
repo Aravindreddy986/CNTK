@@ -158,7 +158,7 @@ void ComputationNetwork::FormRecurrentLoops(const ComputationNodeBasePtr& rootNo
         // first sort by the updated m_visitedOrder, which is identical for all nodes in a loop
         reorderedNodes.sort([](const ComputationNodeBasePtr& lhs, const ComputationNodeBasePtr& rhs) { return lhs->m_visitedOrder < rhs->m_visitedOrder; });
 
-        ReorderLoops(reorderedNodes, recurrentNodes, noRecurrentNodes); // group nodes in loops together
+        ReorderLoops(reorderedNodes); // group nodes in loops together
 
         UpdateEvalOrder(rootNode, reorderedNodes); // TODO: Get rid of this after-the-fact patch.
     }
@@ -407,14 +407,10 @@ void ComputationNetwork::GatherLoopNodesR(const ComputationNodeBasePtr& node, un
 //  - each node that belongs to a loop is replaced by all nodes of that loop in loop order
 //    TODO: But where? Start? End?
 // Called only from FormRecurrentLoops().
-void ComputationNetwork::ReorderLoops(list<ComputationNodeBasePtr>& nodes,
-                                      const map<int, list<ComputationNodeBasePtr>>& /*recurrentNodes*/,
-                                      const list<ComputationNodeBasePtr>& /*noRecurrentNodes*/)
+void ComputationNetwork::ReorderLoops(list<ComputationNodeBasePtr>& nodes)
 {
     list<ComputationNodeBasePtr> newList;
 
-    list<ComputationNodeBasePtr> vTmp;
-    list<ComputationNodeBasePtr> vRecurrentTmp;
     vector<bool> accessed(m_allSEQNodes.size(), false);
     for (auto nodeIter = nodes.begin(); nodeIter != nodes.end(); nodeIter++)
     {
@@ -432,18 +428,6 @@ void ComputationNetwork::ReorderLoops(list<ComputationNodeBasePtr>& nodes,
         {
             newList.push_back(*nodeIter);
         }
-    }
-
-    if (vRecurrentTmp.size() > 0)
-    {
-        newList.insert(newList.end(), vRecurrentTmp.begin(), vRecurrentTmp.end());
-        vRecurrentTmp.clear();
-    }
-
-    if (vTmp.size() > 0)
-    {
-        newList.insert(newList.end(), vTmp.begin(), vTmp.end());
-        vTmp.clear();
     }
 
     nodes = newList;
