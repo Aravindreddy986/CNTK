@@ -138,23 +138,7 @@ void ComputationNetwork::FormRecurrentLoops(const ComputationNodeBasePtr& rootNo
     // TODO: This should go away, and be done locally in PAR constructor, no need to modify global eval order  --TODO: ...or is it? What are global eval orders used for besides this?
     if (m_allSEQNodes.size() > 0)
     {
-        unordered_set<ComputationNodeBasePtr> visited;
-
-        // get set of all nodes in and outside loops hanging off rootNode
-        map<int, list<ComputationNodeBasePtr>> recurrentNodes;
-        list<ComputationNodeBasePtr> noRecurrentNodes;
-#if 1 // will soon no longer be allowed
-        if (rootNode)
-            GatherLoopNodesR(rootNode, visited, recurrentNodes, noRecurrentNodes);
-        else
-#endif
-        {
-            for (const auto& rootNode2 : m_allRoots)
-                GatherLoopNodesR(rootNode2, visited, recurrentNodes, noRecurrentNodes);
-        }
-
         auto reorderedNodes = nodes;
-
         // first sort by the updated m_visitedOrder, which is identical for all nodes in a loop
         reorderedNodes.sort([](const ComputationNodeBasePtr& lhs, const ComputationNodeBasePtr& rhs) { return lhs->m_visitedOrder < rhs->m_visitedOrder; });
 
@@ -377,28 +361,6 @@ void ComputationNetwork::DetermineLoopForwardOrderR(unordered_set<ComputationNod
     }
     else if (recStack.find(cur) != recStack.end()) // note: this is the only use of recStack
         LogicError("%ls %ls operation is part of an infinite loop that cannot be unrolled.", cur->NodeName().c_str(), cur->OperationName().c_str());
-}
-
-// traverse sub-graph feeding this node (which is a top-level node at start, e.g. training criterion) and list
-//  - all nodes that participate in a loop -> recurrentResult[loopId][]
-//  - all nodes that don't                 -> noRecurrentResult[]
-// in order of traversal (depth-first).
-// This is part of the FormRecurrentLoops() process, and only called from there from one place.
-void ComputationNetwork::GatherLoopNodesR(const ComputationNodeBasePtr& node, unordered_set<ComputationNodeBasePtr>& visited,
-                                          map<int, list<ComputationNodeBasePtr>>& recurrentResult,
-                                          list<ComputationNodeBasePtr>& noRecurrentResult)
-{
-    if (visited.find(node) != visited.end())
-        return; // do each node only once
-    visited.insert(node);
-
-    for (int i = 0; i < node->GetNumInputs(); i++)
-        GatherLoopNodesR(node->Input(i), visited, recurrentResult, noRecurrentResult);
-
-    if (node->m_loopId >= 0)
-        recurrentResult[node->m_loopId].push_back(node);
-    else
-        noRecurrentResult.push_back(node);
 }
 
 // takes a list of nodes and modifies it such that all nodes of the same loop are consecutive

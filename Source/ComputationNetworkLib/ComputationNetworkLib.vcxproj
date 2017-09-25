@@ -119,6 +119,7 @@
     <ClInclude Include="ComputationNode.h" />
     <ClInclude Include="ConvolutionalNodes.h" />
     <ClInclude Include="DeprecatedNodes.h" />
+    <ClInclude Include="GraphOperations.h" />
     <ClInclude Include="PreComputeNodes.h" />
     <ClInclude Include="RNNNodes.h" />
     <ClInclude Include="SequenceReshapeNodes.h" />
@@ -131,6 +132,7 @@
     <ClInclude Include="RecurrentNodes.h" />
     <ClInclude Include="ReshapingNodes.h" />
     <ClInclude Include="stdafx.h" />
+    <ClInclude Include="StrongComponentDetector.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="TrainingNodes.h" />
     <ClInclude Include="UserDefinedV2FunctionNode.h" />
