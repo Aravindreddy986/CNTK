@@ -104,6 +104,24 @@ namespace CNTK
     std::vector<StrongComponent<TNode>> StrongComponents(const DirectedGraph<TNode>& graph);
 
     //
+    // Sorts nodes inside strong components for evaluation.
+    // The order is defined as follows:
+    //  - take a connected component
+    //  - find all its nodes that feed only into delay nodes, these nodes become new roots
+    //  - perform the topological sort starting at these roots and breaking at delay nodes
+    //  - update the component with the reordered list of sorted nodes
+    //
+    template<class TNode>
+    void EvaluationSort(const DirectedGraph<TNode>& graph, std::function<bool(const TNode&)> delay, std::vector<StrongComponent<TNode>>& strongComponents);
+
+    //
+    // Sorts all nodes of the graph in the evaluation order given by the root nodes.
+    // Strongly connected componentes should be already sorted using EvaluationSort function.
+    //
+    template<class TNode>
+    std::vector<TNode> GlobalEvaluationSort(const DirectedGraph<TNode>& graph, const std::vector<StrongComponent<TNode>>& strongComponents);
+
+    //
     // Actual implementation of the above functions.
     //
     namespace Internal
@@ -140,28 +158,11 @@ namespace CNTK
             int m_minIndex{ -1 };      // min of m_index over all nodes within a single component
             bool m_inStack{ false };   // flag indicating whether the node is still on the stack
         };
-    }
 
-    //
-    // Returns a list of nodes reachable from 'startNodes' in the post-order traversal.
-    // For more information please see the forward declaration at the beginning of the file.
-    //
-    template<class TNode>
-    inline std::list<TNode> PostOrderTraversal(const DirectedGraph<TNode>& graph, const std::vector<TNode>& startNodes)
-    {
-        std::list<TNode> result;
-        std::set<TNode> visited;
-        for (const auto& node : startNodes)
-            Internal::PostOrderTraversalImpl(graph, node, visited, result);
-        return result;
-    }
-
-
-    class StrongComponentDetector
-    {
-    public:
-        
-
+        //
+        // Recursive implementation of the Tarjan algorithm for finding all stronly connected
+        // components.
+        //
         template<class TNode>
         void StrongComponentsImpl(
             const DirectedGraph<TNode>& graph,
@@ -175,8 +176,8 @@ namespace CNTK
 
             // set the index (in order of visitation)
             // Each node is assigned a unique integer m_index, which numbers the nodes consecutively in the order in which they are discovered.
-            state[node].m_index = index;    // TODO: can this be used as m_visitedOrder?
-            state[node].m_minIndex = index; // also set m_minIndex
+            state[node].m_index = index;
+            state[node].m_minIndex = index;
             index++;
 
             state[node].m_visited = true;
@@ -215,7 +216,7 @@ namespace CNTK
             // if 'node' is a root node, then we closed a loop.
             // 'node' must be left on the stack if m_minIndex < m_index,
             // whereas it must be removed as the root of a strongly connected component if m_minIndex == m_index.
-            // m_minIndex is computed during the depth-first search from 'cur' (above), as this finds the nodes that are reachable from 'cur'. [Wikipedia]
+            // m_minIndex is computed during the depth-first search from 'node' (above), as this finds the nodes that are reachable from 'node'. [Wikipedia]
             assert(state[node].m_minIndex <= state[node].m_index);
             if (state[node].m_minIndex == state[node].m_index) // m_minIndex is still equal to m_index, as we set it at the start of this function: we closed a loop
             {
@@ -244,73 +245,11 @@ namespace CNTK
             }
         }
 
-        template<class TNode>
-        std::vector<StrongComponent<TNode>> StrongComponents(const DirectedGraph<TNode>& graph)
-        {
-            std::map<TNode, Internal::StrongComponentNodeState> state;
-            std::vector<StrongComponent<TNode>> result;
-            std::stack<TNode> nodeStack;
-            size_t index = 0;
-            for (auto& root : graph.Roots())
-            {
-                if (state[root].m_visited)
-                    continue;
-                StrongComponentsImpl(graph, root, nodeStack, index, state, result);
-            }
-
-            return result;
-        }
-
-        // Sorts nodes inside strong components according to their evaluation order.
-        // The algorithm:
-        //  - take component
-        //  - finds all its nodes that feed only into delay node
-        //  - these nodes become new roots
-        //  - perform the topological sort using these roots
-        //  - update the component with the reordered list.
-        template<class TNode>
-        inline void EvaluationSort(std::vector<StrongComponent<TNode>>& strongComponents, const DirectedGraph<TNode>& graph, std::function<bool(const TNode&)> delay)
-        {
-            for (auto& component : strongComponents)
-            {
-                // Get all nodes that only have a delay child, these
-                // will become new roots for evaluation.
-                const auto& nestedNodes = component.Nodes();
-                std::set<TNode> newRoots(nestedNodes.begin(), nestedNodes.end());
-                for (const auto& node : nestedNodes)
-                {
-                    if (delay(node))
-                        continue;
-
-                    for (const auto& predecessor : graph.Predecessors(node))
-                    {
-                        if (component.Contains(predecessor))
-                            newRoots.erase(predecessor);
-                    }
-                }
-
-                // Perform the topological sort stopping at delay nodes
-                // to break the loops.
-                std::vector<TNode> reordered;
-                reordered.reserve(component.Nodes().size());
-
-                std::set<TNode> visited;
-                for (const auto& root : newRoots)
-                {
-                    if (visited.find(root) != visited.end())
-                        continue;
-
-                    std::set<TNode> checkInfinity;
-                    LoopEvaluationSort(visited, checkInfinity, reordered, root, graph, component, delay);
-                }
-
-                // Update the component.
-                component.UpdateNodeOrder(std::move(reordered));
-            }
-        }
-
+        //
+        // Helper function for EvaluationSort of nodes inside connected components.
         // Creates the processing order within a recurrent loop.
         // Re-traverses the set of nodes between 'node' and the first delay node on each sub-graph.
+        //
         template<class TNode>
         void LoopEvaluationSort(std::set<TNode>& visited,
             std::set<TNode>& nodesOnThePathFromRoot,
@@ -344,47 +283,134 @@ namespace CNTK
             nodesOnThePathFromRoot.erase(node);
             result.push_back(node);
         }
+    }
 
-        // Sorts all nodes of the graph in the evaluation order given by the root nodes.
-        template<class TNode>
-        inline std::vector<TNode> GlobalEvaluationSort(const DirectedGraph<TNode>& graph, const std::vector<StrongComponent<TNode>>& strongComponents)
+    //
+    // Returns a list of nodes reachable from 'startNodes' in the post-order traversal.
+    // For more information please see the forward declaration at the beginning of the file.
+    //
+    template<class TNode>
+    inline std::list<TNode> PostOrderTraversal(const DirectedGraph<TNode>& graph, const std::vector<TNode>& startNodes)
+    {
+        std::list<TNode> result;
+        std::set<TNode> visited;
+        for (const auto& node : startNodes)
+            Internal::PostOrderTraversalImpl(graph, node, visited, result);
+        return result;
+    }
+
+    //
+    // Returns a list of strongly connected components using Tarjan algorithm.
+    //
+    template<class TNode>
+    std::vector<StrongComponent<TNode>> StrongComponents(const DirectedGraph<TNode>& graph)
+    {
+        std::map<TNode, Internal::StrongComponentNodeState> state;
+        std::vector<StrongComponent<TNode>> result;
+        std::stack<TNode> nodeStack;
+        size_t index = 0;
+        for (auto& root : graph.Roots())
         {
-            auto nodes = PostOrderTraversal(graph, graph.Roots());
-            if (strongComponents.empty())
-                return std::vector<TNode>(nodes.begin(), nodes.end());
+            if (state[root].m_visited)
+                continue;
+            StrongComponentsImpl(graph, root, nodeStack, index, state, result);
+        }
+        return result;
+    }
 
-            // Now we need to collect all strong components and the rest of the nodes
-            // in the global evaluation order.
-
-            // Prepare additional structure that contains the number of nodes per
-            // component.
-            std::map<std::vector<StrongComponent<TNode>>::const_iterator, size_t> componentToNodeCount;
-            for (auto i = strongComponents.begin(); i != strongComponents.end(); ++i)
-                componentToNodeCount.insert(std::make_pair(i, i->Nodes().size()));
-
-            // Strong components should already be sorted in a proper evaluation order.
-            // The whole strong component gets evaluated on its last node position in the global
-            // topological order list('nodes').
-            std::vector<TNode> result;
-            result.reserve(nodes.size());
-            for (const auto& node : nodes)
+    //
+    // Sorts nodes inside strongly connected components according to their evaluation order,
+    // breaking loops at the delay nodes.
+    //
+    // Used algorithm goes as follows:
+    //  - take a connected component
+    //  - find all its nodes that feed only into delay nodes, these nodes become new roots
+    //  - perform the topological sort starting at these roots and breaking at delay nodes
+    //  - update the component with the reordered list of sorted nodes
+    //
+    template<class TNode>
+    inline void EvaluationSort(const DirectedGraph<TNode>& graph, std::function<bool(const TNode&)> delay, std::vector<StrongComponent<TNode>>& strongComponents)
+    {
+        for (auto& component : strongComponents)
+        {
+            // Get all nodes that only have a delay child, these
+            // will become new roots for evaluation.
+            const auto& nestedNodes = component.Nodes();
+            std::set<TNode> newRoots(nestedNodes.begin(), nestedNodes.end());
+            for (const auto& node : nestedNodes)
             {
-                auto component = std::find_if(strongComponents.begin(), strongComponents.end(),
-                    [&node](const StrongComponent<TNode>& c) { return c.Contains(node); });
-                if (component == strongComponents.end())
+                if (delay(node))
+                    continue;
+
+                for (const auto& predecessor : graph.Predecessors(node))
                 {
-                    result.push_back(node);
-                }
-                else
-                {
-                    // Check if the last node of the component in the global topological
-                    // sort order. If that is the case, insert all nodes of the component.
-                    assert(componentToNodeCount[component] > 0);
-                    if (--componentToNodeCount[component] == 0)
-                        result.insert(result.end(), component->Nodes().begin(), component->Nodes().end());
+                    if (component.Contains(predecessor))
+                        newRoots.erase(predecessor);
                 }
             }
-            return result;
+
+            // Perform the topological sort stopping at delay nodes
+            // to break the loops.
+            std::vector<TNode> reordered;
+            reordered.reserve(component.Nodes().size());
+
+            std::set<TNode> visited;
+            for (const auto& root : newRoots)
+            {
+                if (visited.find(root) != visited.end())
+                    continue;
+
+                std::set<TNode> checkInfinity;
+                Internal::LoopEvaluationSort(visited, checkInfinity, reordered, root, graph, component, delay);
+            }
+
+            // Update the component.
+            component.UpdateNodeOrder(std::move(reordered));
         }
-    };
+    }
+
+    //
+    // Sorts all nodes of the graph in the evaluation order given by the root nodes.
+    // Strongly connected components should be already sorted using EvaluationSort function.
+    //
+    template<class TNode>
+    inline std::vector<TNode> GlobalEvaluationSort(const DirectedGraph<TNode>& graph, const std::vector<StrongComponent<TNode>>& strongComponents)
+    {
+        auto nodes = PostOrderTraversal(graph, graph.Roots());
+        if (strongComponents.empty())
+            return std::vector<TNode>(nodes.begin(), nodes.end());
+
+        // Now we need to collect all strong components and the rest of the nodes
+        // in the global evaluation order.
+
+        // Prepare additional structure that contains the number of nodes per
+        // component.
+        std::map<std::vector<StrongComponent<TNode>>::const_iterator, size_t> componentToNodeCount;
+        for (auto i = strongComponents.begin(); i != strongComponents.end(); ++i)
+            componentToNodeCount.insert(std::make_pair(i, i->Nodes().size()));
+
+        // Strong components should already be sorted in a proper evaluation order.
+        // The whole strong component gets evaluated on its last node position in the global
+        // topological order list('nodes').
+        std::vector<TNode> result;
+        result.reserve(nodes.size());
+        for (const auto& node : nodes)
+        {
+            auto component = std::find_if(strongComponents.begin(), strongComponents.end(),
+                [&node](const StrongComponent<TNode>& c) { return c.Contains(node); });
+            if (component == strongComponents.end())
+            {
+                result.push_back(node);
+            }
+            else
+            {
+                // Check if the last node of the component in the global topological
+                // sort order. If that is the case, insert all nodes of the component.
+                assert(componentToNodeCount[component] > 0);
+                if (--componentToNodeCount[component] == 0)
+                    result.insert(result.end(), component->Nodes().begin(), component->Nodes().end());
+            }
+        }
+        return result;
+    }
 }

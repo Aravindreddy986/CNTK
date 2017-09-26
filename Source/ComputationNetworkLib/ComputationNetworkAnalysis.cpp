@@ -38,22 +38,19 @@ static int GetRecurrenceSteppingDirection(const ComputationNodeBasePtr& node);
 void ComputationNetwork::FormRecurrentLoops()
 {
     ExecutionGraph graph(m_allRoots);
-
-    // Get strong components of the graph.
-    ::CNTK::StrongComponentDetector detector;
-    auto strongComponents = detector.StrongComponents<ComputationNodeBasePtr>(graph);
+    auto strongComponents = StrongComponents(graph);
 
     // In order not to change the existing behavior/naming for BrainScript,
-    // let's remember the root node of each strong component.
+    // let's remember the 'source' node of each strong component.
     std::vector<ComputationNodeBasePtr> componentRootNodes;
     componentRootNodes.reserve(strongComponents.size());
     for (const auto& c : strongComponents)
         componentRootNodes.push_back(c.Nodes().back());
 
-    // Sort nodes inside strong components in the evaluation order.
+    // Sort nodes inside the strong components in the evaluation order.
     std::function<bool(const ComputationNodeBasePtr&)> delay
         = [this](const ComputationNodeBasePtr& n) { return GetRecurrenceSteppingDirection(n) != 0; };
-    detector.EvaluationSort(strongComponents, graph, delay);
+    EvaluationSort(graph, delay, strongComponents);
 
     // Update m_allSEQNodes accordingly.
     for (size_t i = 0; i < strongComponents.size(); ++i)
@@ -68,7 +65,7 @@ void ComputationNetwork::FormRecurrentLoops()
     }
 
     // Peform global sort on all nodes honoring inner strong component sorting.
-    auto sortedNodes = detector.GlobalEvaluationSort(graph, strongComponents);
+    auto sortedNodes = GlobalEvaluationSort(graph, strongComponents);
 
     // Update global eval order in m_evalOrder.
     // TODO: Get rid of this after-the-fact patch.
