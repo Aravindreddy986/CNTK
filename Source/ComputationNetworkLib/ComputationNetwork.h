@@ -275,7 +275,6 @@ public:
 private:
     void PrintMemorySharingStructure(const std::vector<ComputationNodeBasePtr>& nodes);
     void ReleaseMatricesAfterEvalForChildren(ComputationNodeBasePtr n, std::unordered_map<ComputationNodeBasePtr, std::unordered_set<ComputationNodeBasePtr>>& parentsMap);
-    void AllocateGradientMatricesForInputs(ComputationNodeBasePtr parentNode);
 
 public:
     // -----------------------------------------------------------------------
@@ -285,16 +284,9 @@ public:
     void FormNestedNetwork(const ComputationNodeBasePtr& rootNode);
     ComputationNodeBasePtr GetNestedNetwork(const ComputationNodeBasePtr& rootNode);
 
-    // The methods below determine evaluation order, which is tricky in presence of recurrent loops.
-    // TODO: Can this be moved to a separate class?
 private:
-    // This is part of the FormRecurrentLoops() process, and only called from there.
+    // The method below determines evaluation order, which is tricky in presence of recurrent loops.
     void FormRecurrentLoops();
-    void FormRecurrentLoopsOld();
-    void DetermineSCCs(const ComputationNodeBasePtr& rootNode);
-    void DetermineSCCsR(ComputationNodeBasePtr cur, std::list<ComputationNodeBasePtr>& sccStack, size_t& index, size_t& loopId);
-    void DetermineLoopForwardOrderR(std::unordered_set<ComputationNodeBasePtr>& visited, std::unordered_set<ComputationNodeBasePtr>& recStack, std::list<ComputationNodeBasePtr>& nodesStack, ComputationNodeBasePtr cur);
-    void ReorderLoops(std::list<ComputationNodeBasePtr>& nodes);
 
 public:
     // -----------------------------------------------------------------------

@@ -486,7 +486,6 @@ void ComputationNetwork::CompileNetwork()
     InvalidateCompiledNetwork();
 
     // all steps below have to be repeated for all root nodes (=nodes without parents and PreComputeNodes)
-    // eldak -> not important for me, just discovers all root nodes, without parents.
     DetermineSetOfAllRoots();
 
     if (TraceLevel() > 0)
@@ -506,7 +505,6 @@ void ComputationNetwork::CompileNetwork()
     // STEP: Form the m_inputValues and m_learnableParameters sets for the entire network.
     // Needed for ResetMBLayouts() below.
     // TODO: Move this further down; or decide whether the 'nullptr' version is needed, other than ResetMBLayouts() which could use the global order and filter by itself.
-    // eldak -> not important for me, collects all input and learnable parameters.
     CollectInputAndLearnableParameters(nullptr);
 
     // STEP: Establish time-axis relationships.
@@ -515,9 +513,7 @@ void ComputationNetwork::CompileNetwork()
     ResetMBLayouts();
 
     // STEP: Discover nested loops.
-    FormRecurrentLoops(); // form the global one  --TODO: just use this; should be no need to do this for each root
-    //for (auto& node : m_allRoots)
-    //    FormRecurrentLoops(node); // BUGBUG: These calls are needed because they patch EvalOrders. Will be unnecessary once we move this out.
+    FormRecurrentLoops();
 
     // STEP: Create loop-corrected depth-first traversals and cached input/parameter sets for every actual root node.
     for (auto& root : m_allRoots)
