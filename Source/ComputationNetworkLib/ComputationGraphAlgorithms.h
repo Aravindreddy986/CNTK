@@ -263,7 +263,7 @@ namespace CNTK
             {
                 // Check if we have a loop without a delay node.
                 if (nodesOnThePathFromRoot.find(node) != nodesOnThePathFromRoot.end())
-                    LogicError("Node operation is part of an infinite loop that cannot be unrolled.");
+                    LogicError("Node %ls is part of an infinite loop that cannot be unrolled.", ToString(node).c_str());
                 return;
             }
 
