@@ -41,18 +41,25 @@ void ComputationNetwork::FormRecurrentLoops()
 
     // Get strong components of the graph.
     ::CNTK::StrongComponentDetector detector;
-    auto strongComponents = detector.StrongComponents<ComputationNodeBasePtr>(m_allRoots, graph);
+    auto strongComponents = detector.StrongComponents<ComputationNodeBasePtr>(graph);
 
-    std::function<bool(const ComputationNodeBasePtr&)> delay
-        = [this](const ComputationNodeBasePtr& n) { return GetRecurrenceSteppingDirection(n) != 0; };
+    // In order not to change the existing behavior/naming for BrainScript,
+    // let's remember the root node of each strong component.
+    std::vector<ComputationNodeBasePtr> componentRootNodes;
+    componentRootNodes.reserve(strongComponents.size());
+    for (const auto& c : strongComponents)
+        componentRootNodes.push_back(c.Nodes().back());
 
     // Sort nodes inside strong components in the evaluation order.
+    std::function<bool(const ComputationNodeBasePtr&)> delay
+        = [this](const ComputationNodeBasePtr& n) { return GetRecurrenceSteppingDirection(n) != 0; };
     detector.EvaluationSort(strongComponents, graph, delay);
 
     // Update m_allSEQNodes accordingly.
-    for (const auto c : strongComponents)
+    for (size_t i = 0; i < strongComponents.size(); ++i)
     {
-        SEQTraversalFlowControlNode flowControlNode(c.LoopId(), c.Root());
+        const auto& c = strongComponents[i];
+        SEQTraversalFlowControlNode flowControlNode(i, componentRootNodes[i]);
         flowControlNode.m_nestedNodes = c.Nodes(); // TODO: make these two part of the constructor
         for (auto node : flowControlNode.m_nestedNodes)
             node->m_isPartOfLoop = true; // this is the only flag in ComputationNode that escapes FormRecurrentLoops()!

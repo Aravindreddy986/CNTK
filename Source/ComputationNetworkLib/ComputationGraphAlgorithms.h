@@ -8,8 +8,13 @@
 #include <vector>
 #include <list>
 #include <set>
+#include <map>
+#include <functional>
+#include <memory>
 
 //
+// Header only algorithms for working with execution graphs.
+// The functionality is used by the computational network and the code gen evaluation engine.
 // Currently this is refactoring of existing legacy code.
 // In the future we should consider using Boost::Graph instead, but this will require more testing
 // in order not to break current behavior/baselines.
@@ -35,6 +40,8 @@ namespace CNTK
         // Usually these are leafs, but can also be some inner nodes.
         //
         virtual const std::vector<TNode>& Roots() const = 0;
+
+        virtual ~DirectedGraph() {}
     };
 
     //
@@ -50,6 +57,51 @@ namespace CNTK
     //
     template<class TNode>
     inline std::list<TNode> PostOrderTraversal(const DirectedGraph<TNode>& graph, const std::vector<TNode>& startNodes);
+
+    //
+    // Class representing a strongly connected component.
+    //
+    template<class TNode>
+    struct StrongComponent final
+    {
+        StrongComponent(const std::vector<TNode>&& nodes) :
+            m_nodes(std::move(nodes))
+        {}
+
+        //
+        // Returns a list of nested nodes.
+        //
+        const std::vector<TNode>& Nodes() const
+        {
+            return m_nodes;
+        }
+
+        //
+        // Updates the order of nested nodes.
+        //
+        void UpdateNodeOrder(std::vector<TNode>&& nodes)
+        {
+            assert(std::set<TNode>(m_nodes.begin(), m_nodes.end()) == std::set<TNode>(nodes.begin(), nodes.end()));
+            m_nodes = std::move(nodes);
+        }
+
+        //
+        // Checks if the node belongs to the component.
+        //
+        bool Contains(const TNode& node) const
+        {
+            return std::find(m_nodes.begin(), m_nodes.end(), node) != m_nodes.end();
+        }
+
+    private:
+        std::vector<TNode> m_nodes;
+    };
+
+    //
+    // Returns a list of strongly connected components in the graph.
+    //
+    template<class TNode>
+    std::vector<StrongComponent<TNode>> StrongComponents(const DirectedGraph<TNode>& graph);
 
     //
     // Actual implementation of the above functions.
@@ -73,6 +125,21 @@ namespace CNTK
                 PostOrderTraversalImpl(graph, p, visited, result);
             result.push_back(node);
         }
+
+        //
+        // Helper struct used in StrongComponents function.
+        // Contains additional information needed for Tarjan algorithm for
+        // performing strong component search.
+        // Same as in wikipedia,
+        // please see https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm
+        //
+        struct StrongComponentNodeState final
+        {
+            bool m_visited{ false };   // flag indicating whether the node was visited
+            int m_index{ -1 };         // index denoting order in which nodes were visited
+            int m_minIndex{ -1 };      // min of m_index over all nodes within a single component
+            bool m_inStack{ false };   // flag indicating whether the node is still on the stack
+        };
     }
 
     //
@@ -89,81 +156,20 @@ namespace CNTK
         return result;
     }
 
-    template<class TNode>
-    struct StrongComponent
-    {
-        StrongComponent(const TNode& root, size_t loopId, const std::vector<TNode>&& nodes) :
-            m_root(root),
-            m_loopId(loopId),
-            m_nodes(std::move(nodes))
-        {}
-
-        const TNode& Root() const
-        {
-            return m_root;
-        }
-
-        size_t LoopId() const
-        {
-            return m_loopId;
-        }
-
-        const std::vector<TNode>& Nodes() const
-        {
-            return m_nodes;
-        }
-
-        void UpdateNodeOrder(std::vector<TNode>&& nodes)
-        {
-            assert(std::set<TNode>(m_nodes.begin(), m_nodes.end()) == std::set<TNode>(nodes.begin(), nodes.end()));
-            m_nodes = std::move(nodes);
-        }
-
-        bool Contains(const TNode& node) const
-        {
-            return std::find(m_nodes.begin(), m_nodes.end(), node) != m_nodes.end();
-        }
-
-    private:
-        TNode m_root;
-        size_t m_loopId;
-        std::vector<TNode> m_nodes;
-    };
 
     class StrongComponentDetector
     {
     public:
-        // Additional information needed for Tarjan algorithm for
-        // performing strong component search.
-        // Same as in wikipedia, please see https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm
-        struct StrongComponentNodeState
-        {
-            StrongComponentNodeState()
-            {
-                m_visitedOrder = -1;
-                m_numNonDelayedParentsInLoop = 0;
-                m_visited = false;
-                m_index = -1;
-                m_minIndex = -1;
-                m_inStack = false;
-            }
-
-            int m_visitedOrder; // remembers order in which nodes were visited by EnumerateNodes(), but gets updated
-            bool m_visited;     // note: also used by ValidateSubNetwork()
-            int m_numNonDelayedParentsInLoop; // only used inside DetermineSCCs():
-            int m_index;    // index denoting order in which nodes were visited in DetermineSCCs()
-            int m_minIndex; // min of m_index over all nodes within a single loop
-            bool m_inStack;
-        };
+        
 
         template<class TNode>
         void StrongComponentsImpl(
-            DirectedGraph<TNode>& graph,
+            const DirectedGraph<TNode>& graph,
             const TNode& node,
             std::stack<TNode>& nodeStack,
             size_t& index,
-            std::map<TNode, StrongComponentNodeState>& state,
-            std::vector<StrongComponent<TNode>>& connectedComponents)
+            std::map<TNode, Internal::StrongComponentNodeState>& state,
+            std::vector<StrongComponent<TNode>>& strongComponents)
         {
             assert(!state[node].m_visited);
 
@@ -195,14 +201,14 @@ namespace CNTK
                 if (!state[predecessor].m_visited)
                 {
                     // predecessor w has not yet been visited; recurse on it
-                    StrongComponentsImpl(graph, predecessor, nodeStack, index, state, connectedComponents);
+                    StrongComponentsImpl(graph, predecessor, nodeStack, index, state, strongComponents);
                     state[node].m_minIndex = std::min(state[node].m_minIndex, state[predecessor].m_minIndex);
                 }
                 else if (state[predecessor].m_inStack)
                 {
                     // successor w is in stack S and hence in the current SCC
-                    // NOTE! This is actually different from the wikipedia algorithm
-                    state[node].m_minIndex = std::min(state[node].m_minIndex, state[predecessor].m_minIndex);
+                    // NOTE! This line is actually different from the BS algorithm
+                    state[node].m_minIndex = std::min(state[node].m_minIndex, state[predecessor].m_index);
                 }
             }
 
@@ -234,21 +240,18 @@ namespace CNTK
                 if (nestedNodes.size() <= 1)
                     return;
 
-                connectedComponents.emplace_back(node, connectedComponents.size(), std::move(nestedNodes));
+                strongComponents.emplace_back(std::move(nestedNodes));
             }
         }
 
         template<class TNode>
-        std::vector<StrongComponent<TNode>> StrongComponents(const std::vector<TNode>& roots, DirectedGraph<TNode>& graph)
+        std::vector<StrongComponent<TNode>> StrongComponents(const DirectedGraph<TNode>& graph)
         {
-            auto nodes = PostOrderTraversal(graph, roots);
-
-            std::map<TNode, StrongComponentNodeState> state;
+            std::map<TNode, Internal::StrongComponentNodeState> state;
             std::vector<StrongComponent<TNode>> result;
-
             std::stack<TNode> nodeStack;
             size_t index = 0;
-            for (auto& root : roots)
+            for (auto& root : graph.Roots())
             {
                 if (state[root].m_visited)
                     continue;
