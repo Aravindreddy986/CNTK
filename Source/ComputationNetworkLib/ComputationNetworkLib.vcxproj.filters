@@ -153,6 +153,7 @@
     <ClInclude Include="SequenceReshapeNodes.h">
       <Filter>Nodes</Filter>
     </ClInclude>
+    <ClInclude Include="ComputationGraphAlgorithms.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Common">

@@ -69,7 +69,6 @@
     <ClInclude Include="Variable.h" />
     <ClInclude Include="UserFunctionFactory.h" />
     <ClInclude Include="UserDefinedFunction.h" />
-    <ClInclude Include="ComputationGraphAlgorithms.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="API">
