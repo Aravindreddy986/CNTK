@@ -39,12 +39,24 @@ void ComputationNetwork::FormRecurrentLoops()
 {
     ExecutionGraph graph;
 
+    {
+        auto nodes = ::CNTK::PreOrderTraversal(m_allRoots, graph);
+        fprintf(stderr, "Initial All nodes\n");
+        size_t n = 0;
+        for (auto& iter : nodes)
+        {
+            if (n++ % 3 == 0)
+                fprintf(stderr, "\n");
+            fprintf(stderr, "\t%ls", iter->NodeName().c_str());
+        }
+    }
+
     // Get strong components.
     ::CNTK::StrongComponentDetector detector;
     auto strongComponents = detector.StrongComponents<ComputationNodeBasePtr>(m_allRoots, graph);
 
     std::function<bool(const ComputationNodeBasePtr&)> delay
-        = [this](const ComputationNodeBasePtr& n) { return true; };
+        = [this](const ComputationNodeBasePtr& n) { return GetRecurrenceSteppingDirection(n) != 0; };
 
     // Sort nodes inside strong components in the evaluation order.
     detector.EvaluationSort(strongComponents, graph, delay);
@@ -52,8 +64,8 @@ void ComputationNetwork::FormRecurrentLoops()
     // Update m_allSEQNodes accordingly.
     for (const auto c : strongComponents)
     {
-        SEQTraversalFlowControlNode flowControlNode(c.m_loopId, c.m_root);
-        flowControlNode.m_nestedNodes = c.m_nestedNodes; // TODO: make these two part of the constructor
+        SEQTraversalFlowControlNode flowControlNode(c.LoopId(), c.Root());
+        flowControlNode.m_nestedNodes = c.Nodes(); // TODO: make these two part of the constructor
         for (auto node : flowControlNode.m_nestedNodes)
             node->m_isPartOfLoop = true; // this is the only flag in ComputationNode that escapes FormRecurrentLoops()!
         flowControlNode.m_steppingDirection = DetermineLoopDirection(flowControlNode.m_nestedNodes);
@@ -61,10 +73,11 @@ void ComputationNetwork::FormRecurrentLoops()
     }
 
     // Peform global sort on all nodes honoring inner strong component sorting.
-    auto sortedNodes = detector.EvaluationSort(strongComponents, m_allRoots, graph);
+    auto sortedNodes = detector.GlobalEvaluationSort(strongComponents, m_allRoots, graph);
 
     // Update global eval order in m_evalOrder.
-    UpdateEvalOrder(nullptr, sortedNodes); // TODO: Get rid of this after-the-fact patch.
+    // TODO: Get rid of this after-the-fact patch.
+    UpdateEvalOrder(nullptr, std::list<ComputationNodeBasePtr>(sortedNodes.begin(), sortedNodes.end()));
 
     // log the loops
     if (TraceLevel() > 0)
@@ -81,6 +94,15 @@ void ComputationNetwork::FormRecurrentLoops()
             }
             fprintf(stderr, "\n");
         }
+
+        fprintf(stderr, "All nodes\n");
+        size_t n = 0;
+        for (auto& iter : sortedNodes)
+        {
+            if (n++ % 3 == 0)
+                fprintf(stderr, "\n");
+            fprintf(stderr, "\t%ls", iter->NodeName().c_str());
+        }
     }
 }
 
@@ -90,6 +112,17 @@ void ComputationNetwork::FormRecurrentLoopsOld()
     // get the depth-first traversal order
     // Note: This is only used for resetting the state and resetting m_visitedOrder. I think we only need the set, not the order.
     const list<ComputationNodeBasePtr>& nodes = GetEvalOrder(nullptr);
+
+    {
+        fprintf(stderr, "Initial All nodes\n");
+        size_t n = 0;
+        for (auto& iter : nodes)
+        {
+            if (n++ % 3 == 0)
+                fprintf(stderr, "\n");
+            fprintf(stderr, "\t%ls", iter->NodeName().c_str());
+        }
+    }
 
     // initialize the node state owned by us
     // TODO: Verify that the other call to this function is unnecessary, then inline this function here.
@@ -185,9 +218,9 @@ void ComputationNetwork::FormRecurrentLoopsOld()
 
     // now patch global eval order
     // TODO: This should go away, and be done locally in PAR constructor, no need to modify global eval order  --TODO: ...or is it? What are global eval orders used for besides this?
+    auto reorderedNodes = nodes;
     if (m_allSEQNodes.size() > 0)
     {
-        auto reorderedNodes = nodes;
         // first sort by the updated m_visitedOrder, which is identical for all nodes in a loop
         reorderedNodes.sort([](const ComputationNodeBasePtr& lhs, const ComputationNodeBasePtr& rhs) { return lhs->m_visitedOrder < rhs->m_visitedOrder; });
 
@@ -212,6 +245,15 @@ void ComputationNetwork::FormRecurrentLoopsOld()
                 fprintf(stderr, "\t%ls", (*itr)->NodeName().c_str());
             }
             fprintf(stderr, "\n");
+        }
+
+        fprintf(stderr, "All nodes\n");
+        size_t n = 0;
+        for (auto& iter : reorderedNodes)
+        {
+            if (n++ % 3 == 0)
+                fprintf(stderr, "\n");
+            fprintf(stderr, "\t%ls", iter->NodeName().c_str());
         }
     }
 

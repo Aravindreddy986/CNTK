@@ -357,7 +357,7 @@ public:
 
     // replace an existing eval order with an updated one
     // This is meant to be used by FormRecurrentLoops().  TODO: Hopefully this can be not done anymore some day.
-    void UpdateEvalOrder(const ComputationNodeBasePtr& rootNode, std::list<ComputationNodeBasePtr>& nodes)
+    void UpdateEvalOrder(const ComputationNodeBasePtr& rootNode, const std::list<ComputationNodeBasePtr>& nodes)
     {
         GetEvalOrder(rootNode); // verify that there is already an entry for rootNode
         m_evalOrders[rootNode] = nodes;

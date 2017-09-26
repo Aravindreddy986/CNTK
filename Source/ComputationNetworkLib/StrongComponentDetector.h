@@ -24,14 +24,42 @@ namespace CNTK
     template<class TNode>
     struct StrongComponent
     {
-        TNode m_root;
-        size_t m_loopId;
-        std::vector<TNode> m_nestedNodes;
+        StrongComponent(const TNode& root, size_t loopId, const std::vector<TNode>&& nodes) :
+            m_root(root),
+            m_loopId(loopId),
+            m_nodes(std::move(nodes))
+        {}
+
+        const TNode& Root() const
+        {
+            return m_root;
+        }
+
+        size_t LoopId() const
+        {
+            return m_loopId;
+        }
+
+        const std::vector<TNode>& Nodes() const
+        {
+            return m_nodes;
+        }
+
+        void UpdateNodeOrder(std::vector<TNode>&& nodes)
+        {
+            assert(std::set<TNode>(m_nodes.begin(), m_nodes.end()) == std::set<TNode>(nodes.begin(), nodes.end()));
+            m_nodes = std::move(nodes);
+        }
 
         bool Contains(const TNode& node) const
         {
-            return std::find(m_nestedNodes.begin(), m_nestedNodes.end(), node) != m_nestedNodes.end();
+            return std::find(m_nodes.begin(), m_nodes.end(), node) != m_nodes.end();
         }
+
+    private:
+        TNode m_root;
+        size_t m_loopId;
+        std::vector<TNode> m_nodes;
     };
 
     class StrongComponentDetector
@@ -105,8 +133,8 @@ namespace CNTK
                 else if (state[predecessor].m_inStack)
                 {
                     // successor w is in stack S and hence in the current SCC
-                    // There was a bug in original BS here!
-                    state[node].m_minIndex = std::min(state[node].m_minIndex, state[predecessor].m_index);
+                    // NOTE! This is actually different from the wikipedia algorithm
+                    state[node].m_minIndex = std::min(state[node].m_minIndex, state[predecessor].m_minIndex);
                 }
             }
 
@@ -132,26 +160,13 @@ namespace CNTK
                         break;
                 }
 
-                if (nestedNodes.size() <= 1) // not a loop
+                // not a real loop. In degenerate situation it could be that the delay
+                // feeds directly into itself though, but then its still just returns the same value
+                // so can be evaluated in a topological sort order.
+                if (nestedNodes.size() <= 1)
                     return;
 
-                // Check that node belongs only to a single connected component.
-                for (const auto &scc : connectedComponents)
-                {
-                    for (const auto& nested : scc.m_nestedNodes)
-                    {
-                        if (nested != node)
-                            continue;
-                        LogicError("Node is participating in two different connected components, probably error of the algorithm.");
-                    }
-                }
-
-                StrongComponent<TNode> strongComponent;
-                strongComponent.m_root = node;
-                strongComponent.m_loopId = connectedComponents.size();
-                // TODO: can we prove that 'cur' == nestedNodes.front()? If so, we won't need to store it separately.
-                strongComponent.m_nestedNodes = std::move(nestedNodes);
-                connectedComponents.push_back(strongComponent);
+                connectedComponents.emplace_back(node, connectedComponents.size(), std::move(nestedNodes));
             }
         }
 
@@ -177,138 +192,128 @@ namespace CNTK
         }
 
         // Sorts nodes inside strong components according to their evaluation order.
+        // The algorithm:
+        //  - take component
+        //  - finds all its nodes that feed only into delay node
+        //  - these nodes become new roots
+        //  - perform the topological sort using these roots
+        //  - update the component with the reordered list.
         template<class TNode>
-        inline void EvaluationSort(std::vector<StrongComponent<TNode>>& strongComponents, const DirectedGraph<TNode>& graph, std::function<bool(const TNode&)> delayed)
+        inline void EvaluationSort(std::vector<StrongComponent<TNode>>& strongComponents, const DirectedGraph<TNode>& graph, std::function<bool(const TNode&)> delay)
         {
-            // Perform reordering of loop nodes.
-            std::map<TNode, bool> hasNonDelayAsParent;
             for (auto& component : strongComponents)
             {
-                // Marks nodes that have non delay parent in the loop.
-                const auto& nestedNodes = component.m_nestedNodes;
+                // Get all nodes that only have a delay child, these
+                // will become new roots for evaluation.
+                const auto& nestedNodes = component.Nodes();
+                std::set<TNode> newRoots(nestedNodes.begin(), nestedNodes.end());
                 for (const auto& node : nestedNodes)
                 {
-                    if (delayed(node))
+                    if (delay(node))
                         continue;
 
                     for (const auto& predecessor : graph.Predecessors(node))
                     {
-                        if (std::find(nestedNodes.begin(), nestedNodes.end(), predecessor) != nestedNodes.end())
-                            hasNonDelayAsParent[predecessor] = true;
+                        if (component.Contains(predecessor))
+                            newRoots.erase(predecessor);
                     }
                 }
 
-                component.m_nestedNodes = LoopEvaluationSort(component.m_nestedNodes, hasNonDelayAsParent, graph, component);
-            }
-        }
+                // Perform the topological sort stopping at delay nodes
+                // to break the loops.
+                std::vector<TNode> reordered;
+                reordered.reserve(component.Nodes().size());
 
-        template<class TNode>
-        void LoopEvaluationSortImpl(std::set<TNode>& visited,
-            std::set<TNode>& infinite,
-            std::list<TNode>& result,
-            TNode node,
-            const std::map<TNode, bool>& hasNonDelayAsParent,
-            const DirectedGraph<TNode>& graph,
-            const StrongComponent<TNode>& component)
-        {
-            if (visited.find(node) == visited.end())
-            {
-                visited.insert(node);
-                infinite.insert(node); // used for detecting infinite loops below
-
-                if (!hasNonDelayAsParent.at(node)) // stop when see recurrence.
+                std::set<TNode> visited;
+                for (const auto& root : newRoots)
                 {
-                    for (const auto& p : graph.Predecessors(node))
-                    {
-                        if (component.Contains(p))
-                            LoopEvaluationSortImpl(visited, infinite, result, p, hasNonDelayAsParent, graph, component);
-                    }
+                    if (visited.find(root) != visited.end())
+                        continue;
+
+                    std::set<TNode> checkInfinity;
+                    LoopEvaluationSort(visited, checkInfinity, reordered, root, graph, component, delay);
                 }
 
-                infinite.erase(node);
-                result.push_back(node);
+                // Update the component.
+                component.UpdateNodeOrder(std::move(reordered));
             }
-            else if (infinite.find(node) != infinite.end())
-                LogicError("Node operation is part of an infinite loop that cannot be unrolled.");
         }
 
         // Creates the processing order within a recurrent loop.
         // Re-traverses the set of nodes between 'node' and the first delay node on each sub-graph.
         template<class TNode>
-        std::vector<TNode> LoopEvaluationSort(const std::vector<TNode>& nodes,
-            const std::map<TNode, bool>& hasNonDelayAsParent,
+        void LoopEvaluationSort(std::set<TNode>& visited,
+            std::set<TNode>& nodesOnThePathFromRoot,
+            std::vector<TNode>& result,
+            TNode node,
             const DirectedGraph<TNode>& graph,
-            const StrongComponent<TNode>& component)
+            const StrongComponent<TNode>& component,
+            std::function<bool(const TNode&)> delay)
         {
-            // Reorder the nodes inside the loop for the execution order.
-            // Each chain between two delay nodes gets reordered.
-            std::list<TNode> reordered;
-            std::set<TNode> visited;
-            for (const auto& node : nodes)
+            if (visited.find(node) != visited.end())
             {
-                std::set<TNode> checkInfinity;
-                if (visited.find(node) == visited.end() && !hasNonDelayAsParent.at(node))
-                    LoopEvaluationSortImpl(visited, checkInfinity, reordered, node, hasNonDelayAsParent, graph, component);
-
-                if (!checkInfinity.empty())
-                    LogicError("Loop contains no delay node.");
+                // Check if we have a loop without a delay node.
+                if (nodesOnThePathFromRoot.find(node) != nodesOnThePathFromRoot.end())
+                    LogicError("Node operation is part of an infinite loop that cannot be unrolled.");
+                return;
             }
 
-            return std::vector<TNode>(reordered.begin(), reordered.end());
+            visited.insert(node);
+            nodesOnThePathFromRoot.insert(node);
+
+            // Recurse if not a delay, stop when see a recurrence.
+            if (!delay(node))
+            {
+                for (const auto& p : graph.Predecessors(node))
+                {
+                    if (component.Contains(p))
+                        LoopEvaluationSort(visited, nodesOnThePathFromRoot, result, p, graph, component, delay);
+                }
+            }
+
+            nodesOnThePathFromRoot.erase(node);
+            result.push_back(node);
         }
 
         // Sorts all nodes of the graph in the evaluation order given by the root nodes.
         template<class TNode>
-        inline std::list<TNode> EvaluationSort(const std::vector<StrongComponent<TNode>> strongComponents, const std::vector<TNode>& roots, const DirectedGraph<TNode>& graph)
+        inline std::vector<TNode> GlobalEvaluationSort(const std::vector<StrongComponent<TNode>>& strongComponents, const std::vector<TNode>& roots, const DirectedGraph<TNode>& graph)
         {
-            //StrongComponentDetector detector;
-            //auto strongComponents = detector.StrongComponents(roots, graph);
-
             auto nodes = PreOrderTraversal(roots, graph);
             if (strongComponents.empty())
-                return nodes;
-
-            //EvaluationSort(strongComponents, graph, delayed);
+                return std::vector<TNode>(nodes.begin(), nodes.end());
 
             // Now we need to collect all strong components and the rest of the nodes
             // in the global evaluation order.
-            size_t i = 0;
-            std::set<TNode> seen;
-            std::vector<std::tuple<size_t, size_t, TNode>> globalOrder;
+
+            // Prepare additional structure that contains the number of nodes per
+            // component.
+            std::map<std::vector<StrongComponent<TNode>>::const_iterator, size_t> componentToNodeCount;
+            for (auto i = strongComponents.begin(); i != strongComponents.end(); ++i)
+                componentToNodeCount.insert(std::make_pair(i, i->Nodes().size()));
+
+            // Strong components should already be sorted in a proper evaluation order.
+            // The whole strong component gets evaluated on its last node position in the global
+            // topological order list('nodes').
+            std::vector<TNode> result;
+            result.reserve(nodes.size());
             for (const auto& node : nodes)
             {
-                if (seen.find(node) != seen.end())
-                    continue;
-
                 auto component = std::find_if(strongComponents.begin(), strongComponents.end(),
                     [&node](const StrongComponent<TNode>& c) { return c.Contains(node); });
-
                 if (component == strongComponents.end())
                 {
-                    globalOrder.push_back(std::make_tuple(i++, 0, node));
-                    seen.insert(node);
+                    result.push_back(node);
                 }
                 else
                 {
-                    size_t j = 0;
-                    for (const auto& n : component->m_nestedNodes)
-                    {
-                        globalOrder.push_back(std::make_tuple(i, j++, n));
-                        seen.insert(n);
-                    }
-                    i++;
+                    // Check if the last node of the component in the global topological
+                    // sort order. If that is the case, insert all nodes of the component.
+                    assert(componentToNodeCount[component] > 0);
+                    if (--componentToNodeCount[component] == 0)
+                        result.insert(result.end(), component->Nodes().begin(), component->Nodes().end());
                 }
             }
-
-            // Sort among nodes and inside the loops.
-            std::sort(globalOrder.begin(), globalOrder.end(),
-                [](const std::tuple<size_t, size_t, TNode>& a, const std::tuple<size_t, size_t, TNode>& b)
-                { return std::get<0>(a) < std::get<0>(b) || std::get<0>(a) == std::get<0>(b) && std::get<1>(a) < std::get<1>(b); });
-
-            // Copy end result.
-            std::list<TNode> result;
-            for (const auto n : globalOrder)
-                result.insert(result.end(), std::get<2>(n));
             return result;
         }
     };
