@@ -323,7 +323,7 @@ private:
                 ElemType* reductionBuffer;
                 // currentGradientIndex will load the index from m_gradientIndexToAggregate
                 size_t currentGradientIndex = m_gradientIndexToAggregate[0];
-                size_t nextGradientIndex = -2;
+                size_t nextGradientIndex = 0; // 0 is for initialization only
                 // Get the first Gradient, and do async D-to-H copy
                 if (currentGradientIndex != -1)
                 {
