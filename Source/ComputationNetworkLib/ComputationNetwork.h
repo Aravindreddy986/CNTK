@@ -30,8 +30,7 @@
 #include <unordered_map>
 #include <set>
 
-#include "GraphOperations.h"
-#include "StrongComponentDetector.h"
+#include "ComputationGraphAlgorithms.h"
 
 namespace Microsoft { namespace MSR { namespace CNTK {
 
@@ -46,15 +45,6 @@ class ComputationNetwork :
 {
 public:
     typedef shared_ptr<ComputationNetwork> ComputationNetworkPtr;
-
-    class ExecutionGraph : public ::CNTK::DirectedGraph<ComputationNodeBasePtr>
-    {
-    public:
-        std::vector<ComputationNodeBasePtr> Predecessors(const ComputationNodeBasePtr& node) const override
-        {
-            return node->GetInputs();
-        }
-    };
 
     // -----------------------------------------------------------------------
     // construction
@@ -318,14 +308,14 @@ public:
         }
 
         std::list<ComputationNodeBasePtr> evalOrder;
-        ExecutionGraph graph;
-        if (!rootNode) // this creates the global one
+        ExecutionGraph graph(m_allRoots);
+        if (!rootNode) // this creates the global list of nodes
         {
-            evalOrder = ::CNTK::PreOrderTraversal(m_allRoots, graph);
+            evalOrder = ::CNTK::PostOrderTraversal(graph, m_allRoots);
         }
         else // this creates a subset of the global eval order of all nodes that rootNode depends on
         {
-            auto rawTraversalForRoot = ::CNTK::PreOrderTraversal({ rootNode }, graph);// traverse to find the set (we ignore the order)
+            auto rawTraversalForRoot = ::CNTK::PostOrderTraversal(graph, { rootNode });// traverse to find the set (we ignore the order)
             set<ComputationNodeBasePtr> rawSet(rawTraversalForRoot.begin(), rawTraversalForRoot.end());
             for (const auto& node : GetEvalOrder(nullptr)) // iterate over global one and pull out everything that is included in the set for rootNode
             {
@@ -1296,6 +1286,25 @@ private:
     // pool for matrices that can be shared across nodes
     // TODO: does this apply to anything else besides temporary node-internal intermediate results? What, for example?
     MatrixPool m_matrixPool;
+
+    // Implementation of a graph based on ComputationNodes.
+    class ExecutionGraph : public ::CNTK::DirectedGraph<ComputationNodeBasePtr>
+    {
+        std::vector<ComputationNodeBasePtr> m_roots;
+
+    public:
+        ExecutionGraph(const std::vector<ComputationNodeBasePtr>& roots) : m_roots(roots) {}
+
+        const std::vector<ComputationNodeBasePtr>& Predecessors(const ComputationNodeBasePtr& node) const override
+        {
+            return node->GetInputs();
+        }
+
+        const std::vector<ComputationNodeBasePtr>& Roots() const override
+        {
+            return m_roots;
+        }
+    };
 };
 typedef ComputationNetwork::ComputationNetworkPtr ComputationNetworkPtr;
 

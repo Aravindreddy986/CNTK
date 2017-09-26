@@ -20,38 +20,26 @@ namespace Microsoft { namespace MSR { namespace CNTK {
 // network recurrent-loop analysis
 // -----------------------------------------------------------------------
 
-// The methods below determine evaluation order, which is tricky in presence of recurrent loops.
-// TODO: Can this be moved to a separate class?
-
+// Helper functions
 static int DetermineLoopDirection(const std::vector<ComputationNodeBasePtr>& nestedNodes);
-static int GetRecurrenceSteppingDirection(const ComputationNodeBasePtr&);
+static int GetRecurrenceSteppingDirection(const ComputationNodeBasePtr& node);
 
-// FormRecurrentLoops() -- MAIN ENTRY POINT for network recurrent-loop analysis. All other functions in this CPP are called only from this one.
-// This function analysis the networks for recurrent loops present in the computation of 'rootNode.'
-// This sets/updates:
+//
+// The method below determine evaluation order, which is tricky in the presence of recurrent loops.
+// It is the main entry for network recurrent-loop analysis.
+// This function analysis the networks for recurrent loops present in the computation graph.
+// It sets/updates:
 //  - m_allSEQNodes
 //  - ComputationNode::m_isPartOfLoop (exposed to outside as IsPartOfLoop())
 //  - the cached m_evalOrders[root], reordered to make nodes belonging to the same loop consecutive. TODO: Try not to do that.
-// Is often called before ValidateNetwork() on a root; will be called from inside ValidateNetwork() as well.
-// This function is called for multiple nodes, e.g. eval and training criterion. I.e. it must be able to add to a previous result. E.g. it does not clear the m_visited flags at start.
-// Note: This function is not lazy, i.e. not cached. BuildAndValidateSubNetwork() caches, but others don't.
+// It is often called before ValidateNetwork() on the roots and is called from inside ValidateNetwork() as well.
+// Note: This function does not cache anything. BuildAndValidateSubNetwork() caches, but others don't.
+//
 void ComputationNetwork::FormRecurrentLoops()
 {
-    ExecutionGraph graph;
+    ExecutionGraph graph(m_allRoots);
 
-    {
-        auto nodes = ::CNTK::PreOrderTraversal(m_allRoots, graph);
-        fprintf(stderr, "Initial All nodes\n");
-        size_t n = 0;
-        for (auto& iter : nodes)
-        {
-            if (n++ % 3 == 0)
-                fprintf(stderr, "\n");
-            fprintf(stderr, "\t%ls", iter->NodeName().c_str());
-        }
-    }
-
-    // Get strong components.
+    // Get strong components of the graph.
     ::CNTK::StrongComponentDetector detector;
     auto strongComponents = detector.StrongComponents<ComputationNodeBasePtr>(m_allRoots, graph);
 
@@ -73,7 +61,7 @@ void ComputationNetwork::FormRecurrentLoops()
     }
 
     // Peform global sort on all nodes honoring inner strong component sorting.
-    auto sortedNodes = detector.GlobalEvaluationSort(strongComponents, m_allRoots, graph);
+    auto sortedNodes = detector.GlobalEvaluationSort(graph, strongComponents);
 
     // Update global eval order in m_evalOrder.
     // TODO: Get rid of this after-the-fact patch.
@@ -93,15 +81,6 @@ void ComputationNetwork::FormRecurrentLoops()
                 fprintf(stderr, "\t%ls", (*itr)->NodeName().c_str());
             }
             fprintf(stderr, "\n");
-        }
-
-        fprintf(stderr, "All nodes\n");
-        size_t n = 0;
-        for (auto& iter : sortedNodes)
-        {
-            if (n++ % 3 == 0)
-                fprintf(stderr, "\n");
-            fprintf(stderr, "\t%ls", iter->NodeName().c_str());
         }
     }
 }

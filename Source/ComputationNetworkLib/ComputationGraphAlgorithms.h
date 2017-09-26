@@ -8,17 +8,85 @@
 #include <vector>
 #include <list>
 #include <set>
-#include <stack>
-#include <map>
-#include <algorithm>
-#include <assert.h>
-#include <functional>
-#include "GraphOperations.h"
 
+//
+// Currently this is refactoring of existing legacy code.
+// In the future we should consider using Boost::Graph instead, but this will require more testing
+// in order not to break current behavior/baselines.
+//
 namespace CNTK
 {
+    //
+    // Interface for a directed graph.
+    // The graph can be traversed starting from the graph roots (usually leafs)
+    // and using the predecessor information.
+    //
+    template<class TNode>
+    class DirectedGraph
+    {
+    public:
+        //
+        // A list of predecessors for a given node.
+        //
+        virtual const std::vector<TNode>& Predecessors(const TNode& node) const = 0;
+
+        //
+        // A list of root nodes used as starting points for graph traversal.
+        // Usually these are leafs, but can also be some inner nodes.
+        //
+        virtual const std::vector<TNode>& Roots() const = 0;
+    };
+
+    //
+    // Forward declaration of the main algorithms that are used for defining 
+    // execution order of a computational network.
+    // For the actual implementation please see the end of this file.
+    //
+
+    //
+    // Returns a list of nodes reachable from 'startNodes' in the post-order.
+    // Firstly it visits all predecessors of a starting node, then the node itself.
+    // Starting nodes are evaluated in order and all nodes are visited exactly once.
+    //
+    template<class TNode>
+    inline std::list<TNode> PostOrderTraversal(const DirectedGraph<TNode>& graph, const std::vector<TNode>& startNodes);
+
+    //
+    // Actual implementation of the above functions.
+    //
     namespace Internal
     {
+        // Functions from this namespace should not be used directly.
+
+        //
+        // Function performs post-order traversal of the graph and returns
+        // collected nodes.
+        //
+        template<class TNode>
+        static void PostOrderTraversalImpl(const DirectedGraph<TNode>& graph, const TNode& node, std::set<TNode>& visited, std::list<TNode>& result)
+        {
+            if (visited.find(node) != visited.end())
+                return;
+
+            visited.insert(node);
+            for (const auto& p : graph.Predecessors(node))
+                PostOrderTraversalImpl(graph, p, visited, result);
+            result.push_back(node);
+        }
+    }
+
+    //
+    // Returns a list of nodes reachable from 'startNodes' in the post-order traversal.
+    // For more information please see the forward declaration at the beginning of the file.
+    //
+    template<class TNode>
+    inline std::list<TNode> PostOrderTraversal(const DirectedGraph<TNode>& graph, const std::vector<TNode>& startNodes)
+    {
+        std::list<TNode> result;
+        std::set<TNode> visited;
+        for (const auto& node : startNodes)
+            Internal::PostOrderTraversalImpl(graph, node, visited, result);
+        return result;
     }
 
     template<class TNode>
@@ -173,8 +241,7 @@ namespace CNTK
         template<class TNode>
         std::vector<StrongComponent<TNode>> StrongComponents(const std::vector<TNode>& roots, DirectedGraph<TNode>& graph)
         {
-            // Note: This is only used for resetting the state and resetting m_visitedOrder. I think we only need the set, not the order.
-            auto nodes = PreOrderTraversal(roots, graph);
+            auto nodes = PostOrderTraversal(graph, roots);
 
             std::map<TNode, StrongComponentNodeState> state;
             std::vector<StrongComponent<TNode>> result;
@@ -277,9 +344,9 @@ namespace CNTK
 
         // Sorts all nodes of the graph in the evaluation order given by the root nodes.
         template<class TNode>
-        inline std::vector<TNode> GlobalEvaluationSort(const std::vector<StrongComponent<TNode>>& strongComponents, const std::vector<TNode>& roots, const DirectedGraph<TNode>& graph)
+        inline std::vector<TNode> GlobalEvaluationSort(const DirectedGraph<TNode>& graph, const std::vector<StrongComponent<TNode>>& strongComponents)
         {
-            auto nodes = PreOrderTraversal(roots, graph);
+            auto nodes = PostOrderTraversal(graph, graph.Roots());
             if (strongComponents.empty())
                 return std::vector<TNode>(nodes.begin(), nodes.end());
 
